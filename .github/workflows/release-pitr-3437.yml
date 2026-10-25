@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: HuzaifaAbdulRehman/openeverest
-          ref: 2a6d4930a14d0592dd7a28144fe108827b808be5
+          ref: e72a4d5b8e2c7d380d8cc431d804ac0a34e6cd0f
           persist-credentials: false
 
       - name: Check out PXC provider
