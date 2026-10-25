@@ -151,9 +151,10 @@ test.describe.serial(
     // e2e-endpoint-<idx>; the single everest namespace yields e2e-endpoint-0.
     const monitoringName = 'e2e-endpoint-0';
     const baseBackupName = `dembkp-${db}-${size}`;
+    // Keep PXC's generated restore Job labels within 63 bytes.
     const restoredClusterNames = [
-      `${clusterName}-seed-date`,
-      `${clusterName}-seed-latest`,
+      `${clusterName}-date`,
+      `${clusterName}-latest`,
     ];
     let seedRestoreTime: PitrTime;
     let storageClasses: string[] = [];
@@ -824,7 +825,7 @@ test.describe.serial(
         page,
         request,
       }) => {
-        const restoredClusterName = `${clusterName}-seed-${recoveryTarget}`;
+        const restoredClusterName = `${clusterName}-${recoveryTarget}`;
         const instancePath = `/v1/clusters/main/namespaces/${namespace}/instances`;
         const sourceResponse = await request.get(
           `${instancePath}/${clusterName}`,
@@ -937,7 +938,13 @@ test.describe.serial(
             await expect
               .poll(
                 async () =>
-                  (await request.get(restoredPath, { headers })).status(),
+                  (
+                    await request.get(restoredPath, {
+                      headers: {
+                        Authorization: `Bearer ${await getCITokenFromLocalStorage()}`,
+                      },
+                    })
+                  ).status(),
                 { timeout: 180000, intervals: [2000, 5000, 5000] }
               )
               .toBe(404);
