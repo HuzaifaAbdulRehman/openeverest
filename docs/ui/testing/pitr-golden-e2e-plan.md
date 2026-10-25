@@ -1,7 +1,7 @@
 # PITR Golden E2E — Immediate Plan
 
-Status: **ready to implement (after current PITR changes are committed)**.
-Last updated: 2026-08-06.
+Status: in-place and new-database PITR scenarios implemented; live validation is required.
+Last updated: 2026-10-25.
 
 Scope: the minimal, high-value test set to verify PITR / restore-from-PITR right
 now. Broader test-architecture ideas live in
@@ -27,7 +27,7 @@ now. Broader test-architecture ideas live in
 
 Deferred to later branches / discussion:
 
-- Restore-to-**new-cluster** (PITR seed) → separate branch.
+- Recovery-window edge cases and the complete restore RBAC matrix (#2896).
 - BE→FE gate, nightly, validator container → roadmap.
 
 ---
@@ -53,6 +53,14 @@ required as the recovery anchor.
 7. **Verify data == state at T.**
 8. **Restore to latest:** repeat with `recoveryTarget=latest` (no date) → green →
    **verify data == latest state**.
+9. **Prepare a new recovery anchor:** back up rows 1-8, insert row 9, record T,
+   then insert row 10. Wait until the uploaded PITR window covers the last insert.
+10. **Create a new database from PITR** for date T and latest, sequentially. Check
+    that the wizard submits the source instance, storage, recovery target and date
+    (date target only) in `spec.dataSource`. The date clone must contain rows 1-9;
+    latest must contain rows 1-10. Verify the source's identity, spec and rows are
+    unchanged after each clone. Delete each target and wait for its disappearance,
+    including when an assertion fails, before starting the next case.
 
 ### Optional realism assert (not a second restore)
 
@@ -107,7 +115,8 @@ v1 covered PITR **only via e2e** (no unit tests). Main files:
 - v1 test ids differ from v2 → re-target selectors.
 - v1 ran `3 engines × sizes` → collapse to **one reference provider**.
 
-**Deferred:** v1's "PITR restore to new cluster" (seed) → separate branch.
+**Ported:** PITR restore to a new database (date and latest) now runs in the same
+PXC release golden, reusing the source and cleaning up each restored target.
 
 ---
 
@@ -116,8 +125,9 @@ v1 covered PITR **only via e2e** (no unit tests). Main files:
 - Re-enable / rewrite the `db-restore` project in
   `ui/apps/everest/.e2e/playwright.config.ts` (currently commented out on the v2
   branch) and add the golden spec there.
-- Tag as `@release` so it runs in the live lane; keep it to the two sub-flows
-  (date + latest) in one connected test to minimise runtime.
+- The existing `release:pitr` project runs the `@release` golden, including
+  in-place and new-database date/latest restores, as one serial flow. The new
+  cases reuse the existing source and hold only one restored target at a time.
 
 ---
 
