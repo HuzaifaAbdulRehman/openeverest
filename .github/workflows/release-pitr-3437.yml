@@ -1,0 +1,133 @@
+# One-off validation for PR #3437 using the upstream release lane.
+name: PITR validation for PR 3437
+on:
+  push:
+    branches: [ci-pitr-3437]
+permissions:
+  contents: read
+  packages: read
+concurrency:
+  group: ci-pitr-3437
+  cancel-in-progress: false
+env:
+  GONOPROXY: "github.com/percona"
+  GONOSUMDB: "github.com/percona"
+  GOPRIVATE: "github.com/percona"
+  PROVIDER_REPO: openeverest/provider-percona-xtradb-cluster
+
+jobs:
+  release-e2e:
+    name: Release e2e (release:pitr)
+    if: github.repository == 'HuzaifaAbdulRehman/openeverest'
+    # Not CNCF: the host mysqld AppArmor profile below must not be unloaded on shared ARC nodes.
+    runs-on: ubuntu-latest
+    # The live 3-node PXC PITR restores alone take ~20 min; give the whole lane
+    # generous headroom.
+    timeout-minutes: 120
+    env:
+      PROJECT: release:pitr
+      CLUSTER_PROVIDER: kind
+      # deploy-pxc-provider defaults PXC_PROVIDER_DIR to ../provider-…; on CI we
+      # check the provider out under the workspace and point at it explicitly.
+      PXC_PROVIDER_DIR: ${{ github.workspace }}/provider-percona-xtradb-cluster
+    steps:
+      - name: Check out openeverest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: HuzaifaAbdulRehman/openeverest
+          ref: 2a6d4930a14d0592dd7a28144fe108827b808be5
+          persist-credentials: false
+
+      - name: Check out PXC provider
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.PROVIDER_REPO }}
+          ref: 20b69cf0c0b9ff6c2d9cd70395cf4b581a6112d8
+          persist-credentials: false
+          path: provider-percona-xtradb-cluster
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      # `make deploy-all` builds the embedded UI (`make build-ui` -> `pnpm install`),
+      # so Node and pnpm must be available on the runner before deploying.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 9.4.0
+
+      - name: Use Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.x
+          cache: "pnpm"
+          cache-dependency-path: "ui/pnpm-lock.yaml"
+
+      # It confines mysqld inside the privileged kind nodes, so PXC never reads /etc/my.cnf.
+      - name: Unload host mysqld AppArmor profile
+        run: |
+          if [ -f /etc/apparmor.d/usr.sbin.mysqld ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld
+          fi
+
+      - name: Install Kubernetes tools (kubectl, kind)
+        uses: ./.github/actions/install-kubernetes-tools
+        with:
+          install-kubectl: true
+          install-kind: true
+
+      - name: Create kind test cluster
+        run: make kind-cluster-up
+
+      - name: Build and deploy core Everest
+        run: make deploy-all
+
+      - name: Deploy the PXC provider
+        run: make deploy-pxc-provider
+
+      - name: Prepare test environment (MinIO, PMM, DB namespace)
+        working-directory: ui/apps/everest/.e2e
+        run: make ci-init
+
+      - name: Run release e2e (${{ env.PROJECT }})
+        id: e2e
+        working-directory: ui/apps/everest/.e2e
+        run: make test PROJECT=${{ env.PROJECT }} FLAGS=--workers=2
+
+      - name: Dump cluster diagnostics on failure
+        if: ${{ always() && steps.e2e.outcome != 'success' }}
+        run: |
+          kubectl get instances,pods -A || true
+          kubectl get restores.backup.openeverest.io -A || true
+          # Why an Instance is stuck in Provisioning: the PXC provider maps the
+          # PerconaXtraDBCluster .status.state to Ready. Capture that state, the
+          # Instance conditions, recent events, and the provider/operator logs.
+          kubectl get pxc -A -o wide || true
+          kubectl -n everest get instances -o yaml || true
+          kubectl -n everest get pxc -o yaml || true
+          kubectl -n everest get events --sort-by=.lastTimestamp | tail -50 || true
+          kubectl -n provider-system logs deploy/provider-percona-xtradb-cluster --tail=200 || true
+          kubectl -n provider-system logs deploy/provider-percona-xtradb-cluster-operator --tail=200 || true
+          # The 200-line tails above only cover teardown; keep full logs in the artifact.
+          DIAG=ui/apps/everest/.e2e/cluster-diagnostics
+          mkdir -p "$DIAG"
+          for r in backups.backup.openeverest.io perconaxtradbclusterbackups.pxc.percona.com perconaxtradbclusterrestores.pxc.percona.com; do
+            kubectl get "$r" -A -o wide >> "$DIAG/backups.txt" 2>&1 || true
+          done
+          kubectl get events -A --sort-by=.lastTimestamp > "$DIAG/events.txt" 2>&1 || true
+          kubectl -n provider-system logs deploy/provider-percona-xtradb-cluster > "$DIAG/provider.log" 2>&1 || true
+          kubectl -n provider-system logs deploy/provider-percona-xtradb-cluster-operator > "$DIAG/pxc-operator.log" 2>&1 || true
+
+      - name: Upload Playwright report
+        if: ${{ always() && steps.e2e.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-e2e-report
+          path: |
+            ui/apps/everest/.e2e/playwright-report
+            ui/apps/everest/.e2e/test-results
+            ui/apps/everest/.e2e/cluster-diagnostics
+          retention-days: 14
+          overwrite: true
