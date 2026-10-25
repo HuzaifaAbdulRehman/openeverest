@@ -1,6 +1,6 @@
 # PITR Golden E2E — Immediate Plan
 
-Status: in-place and new-database PITR scenarios implemented; live validation is required.
+Status: in-place and new-database PITR scenarios implemented and validated on PXC.
 Last updated: 2026-10-25.
 
 Scope: the minimal, high-value test set to verify PITR / restore-from-PITR right
@@ -14,8 +14,8 @@ now. Broader test-architecture ideas live in
 - Land the current PITR feature changes first (commit), then implement this on a
   **separate branch** to avoid bloating the feature PR.
 - Reference provider: **PXC** (richest `uiSchema` + `pitrParametersSchema`).
-- Runs in the existing live lane (`dev-fe-e2e.yaml`: minikube + real Go backend +
-  provider via OLM catalog).
+- Runs in the `release:pitr` project through `.github/workflows/release-e2e.yml`
+  (kind, real Go backend and PXC provider).
 
 ---
 
@@ -122,9 +122,8 @@ PXC release golden, reusing the source and cleaning up each restored target.
 
 ## 5. Wiring
 
-- Re-enable / rewrite the `db-restore` project in
-  `ui/apps/everest/.e2e/playwright.config.ts` (currently commented out on the v2
-  branch) and add the golden spec there.
+- The release workflow deploys core OpenEverest, the PXC provider, SeaweedFS
+  and PMM before running Playwright.
 - The existing `release:pitr` project runs the `@release` golden, including
   in-place and new-database date/latest restores, as one serial flow. The new
   cases reuse the existing source and hold only one restored target at a time.
@@ -136,6 +135,5 @@ PXC release golden, reusing the source and cleaning up each restored target.
 - Is a **schedule** strictly required for the PITR stream to start, or is
   `pitr.enabled` on the storage sufficient with only a demand backup? (We keep
   the schedule in setup for realism regardless.)
-- Confirm the exact v2 test ids / selectors for the restore modal PITR controls.
 - Confirm `recoveryTarget=latest` requires the storage `pitr.state=Available`
   with `latestRestorableTime` set before the option is offered.
